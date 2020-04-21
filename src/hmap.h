@@ -74,6 +74,15 @@ namespace ema {
 			hash_entry() : next(0) {
 			}
 
+			int size(void) const {
+				for(int i = 0; i < MAX_HASH_ENTRIES; ++i) {
+					const auto	e = entries[i].load();
+					if(!e.hash)
+						return i;
+				}
+				return MAX_HASH_ENTRIES-1;
+			}
+
 			const std::atomic<hash_index>* find(const hash_type h, const Key& k, const kv_chunk* data) const {
 				for(int i = 0; i < MAX_HASH_ENTRIES; ++i) {
 					const auto	e = entries[i].load();
@@ -163,6 +172,14 @@ namespace ema {
 
 		size_t mem_size(void) const {
 			return sizeof(*this) + sizeof(hash_entry)*Nbuckets + sizeof(kv_chunk);
+		}
+
+		void used_buckets(size_t els_per_bucket[8]) const {
+			for(int i = 0; i < 8; ++i)
+				els_per_bucket[i] = 0;
+			for(size_t i = 0; i < Nbuckets; ++i) {
+				++els_per_bucket[entries_[i].size()];
+			}
 		}
 
 		~hmap() {
