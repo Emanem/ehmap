@@ -27,6 +27,7 @@ int main(const int argc, const char *argv[]) {
 		};
 
 		ema::hmap<int, double, my_hasher>	m;
+		std::cout << "m.mem_size()\t" << m.mem_size() << std::endl;
 		std::cout << "m.insert(1, 1.23)\t" << m.insert(1, 1.23) << std::endl;
 		std::cout << "m.insert(1, 1.4)\t" << m.insert(1, 1.4) << std::endl;
 		std::cout << "m.insert(2, 5.0123)\t" << m.insert(2, 5.0123) << std::endl;

@@ -161,6 +161,10 @@ namespace ema {
 			return cur_el != 0;
 		}
 
+		size_t mem_size(void) const {
+			return sizeof(*this) + sizeof(hash_entry)*Nbuckets + sizeof(kv_chunk);
+		}
+
 		~hmap() {
 			delete [] entries_;
 			delete data_;
