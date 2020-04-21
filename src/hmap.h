@@ -134,9 +134,13 @@ namespace ema {
 						if(data->pairs[e.index].k == k) {
 							// if it's the same, just return 0
 							// if we have a non (-1) index then
-							// count for unused_pairs
-							if(idx != (uint32_t)-1)
+							// count for unused_pairs and reset
+							// them with default initialization
+							if(idx != (uint32_t)-1) {
+								data->pairs[idx].k = Key();
+								data->pairs[idx].v = Value();
 								++data->unused_pairs;
+							}
 							return 0;
 						}
 					}
