@@ -37,8 +37,9 @@ namespace ema {
 		struct kv_chunk {
 			std::atomic<uint32_t>	cur_pair;
 			kv			pairs[Nelems];
+			std::atomic<uint32_t>	unused_pairs;
 
-			kv_chunk() noexcept : cur_pair(0) {
+			kv_chunk() noexcept : cur_pair(0), unused_pairs(0) {
 			}
 
 			bool insert_kv(const Key& k, const Value& v, uint32_t& idx) {
@@ -132,6 +133,10 @@ namespace ema {
 						// value itself
 						if(data->pairs[e.index].k == k) {
 							// if it's the same, just return 0
+							// if we have a non (-1) index then
+							// count for unused_pairs
+							if(idx != (uint32_t)-1)
+								++data->unused_pairs;
 							return 0;
 						}
 					}
@@ -150,6 +155,12 @@ namespace ema {
 
 		const static uint32_t	HASH_FLAG = 0x80000000;
 	public:
+		struct stats {
+			size_t		els_per_bucket[8];
+			uint32_t	unused_pairs,
+					all_pairs;
+		};
+
 		hmap() : entries_(new hash_entry[Nbuckets]), data_(new kv_chunk) {
 		}
 
@@ -174,12 +185,14 @@ namespace ema {
 			return sizeof(*this) + sizeof(hash_entry)*Nbuckets + sizeof(kv_chunk);
 		}
 
-		void used_buckets(size_t els_per_bucket[8]) const {
+		void get_stats(stats& s) const {
 			for(int i = 0; i < 8; ++i)
-				els_per_bucket[i] = 0;
+				s.els_per_bucket[i] = 0;
 			for(size_t i = 0; i < Nbuckets; ++i) {
-				++els_per_bucket[entries_[i].size()];
+				++s.els_per_bucket[entries_[i].size()];
 			}
+			s.unused_pairs = data_->unused_pairs;
+			s.all_pairs = data_->cur_pair;
 		}
 
 		~hmap() {

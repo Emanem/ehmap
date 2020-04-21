@@ -27,7 +27,9 @@ int main(const int argc, const char *argv[]) {
 			}
 		};
 
-		ema::hmap<int, double, my_hasher, 256*1024>	m;
+		typedef ema::hmap<int, double, my_hasher, 256*1024>	MY_MAP;
+
+		MY_MAP	m;
 		std::cout << "m.mem_size()\t" << m.mem_size() << std::endl;
 		std::cout << "m.insert(1, 1.23)\t" << m.insert(1, 1.23) << std::endl;
 		std::cout << "m.insert(1, 1.4)\t" << m.insert(1, 1.4) << std::endl;
@@ -51,10 +53,12 @@ int main(const int argc, const char *argv[]) {
 			delete th[i];
 		}
 		// print out stats for used buckets
-		size_t	buckets[8];
-		m.used_buckets(buckets);
-		for(size_t i = 0; i < sizeof(buckets)/sizeof(size_t); ++i)
-			std::cout << i << "\t" << buckets[i] << std::endl;
+		MY_MAP::stats	s;
+		m.get_stats(s);
+		for(size_t i = 0; i < sizeof(s.els_per_bucket)/sizeof(size_t); ++i)
+			std::cout << i << "\t" << s.els_per_bucket[i] << std::endl;
+		std::cout << "s.unused_pairs\t" << s.unused_pairs << std::endl;
+		std::cout << "s.all_pairs\t" << s.all_pairs << std::endl;
 	} catch(const std::exception& e) {
 		std::cerr << "Exception: " << e.what() << std::endl;
 	} catch(...) {
