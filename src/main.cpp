@@ -27,8 +27,11 @@ int main(const int argc, const char *argv[]) {
 		};
 
 		ema::hmap<int, double, my_hasher>	m;
-		auto*					v = m.insert(1, 1.23);					
-		const auto*				d = m.find(1);
+		std::cout << "m.insert(1, 1.23)\t" << m.insert(1, 1.23) << std::endl;
+		std::cout << "m.insert(1, 1.4)\t" << m.insert(1, 1.4) << std::endl;
+		std::cout << "m.insert(2, 5.0123)\t" << m.insert(2, 5.0123) << std::endl;
+		std::cout << "m.find(1)\t" << m.find(1) << std::endl;
+		std::cout << "m.find(2)\t" << m.find(2) << std::endl;
 	} catch(const std::exception& e) {
 		std::cerr << "Exception: " << e.what() << std::endl;
 	} catch(...) {

@@ -35,8 +35,23 @@ namespace ema {
 		};
 
 		struct kv_chunk {
-			std::atomic<kv*>	cur_pair;
+			std::atomic<uint32_t>	cur_pair;
 			kv			pairs[Nelems];
+
+			kv_chunk() noexcept : cur_pair(0) {
+			}
+
+			bool insert_kv(const Key& k, const Value& v, uint32_t& idx) {
+				uint32_t	cv = cur_pair.load();
+				if(cv >= Nelems)
+					return false;
+				if(!cur_pair.compare_exchange_strong(cv, cv+1))
+					return insert_kv(k, v, idx);
+				pairs[cv].k = k;
+				pairs[cv].v = v;
+				idx = cv;
+				return true;
+			}
 		};
 
 		struct hash_index {
@@ -80,19 +95,26 @@ namespace ema {
 				else return 0;
 			}
 
-			const std::atomic<hash_index>* insert(const hash_type h, const Key& k, kv_chunk* data, const uint32_t idx) {
+			const std::atomic<hash_index>* insert_once(const hash_type h, const Key& k, const Value& v, kv_chunk* data, uint32_t idx = (uint32_t)-1) {
 				for(int i = 0; i < MAX_HASH_ENTRIES; ++i) {
 					auto	e = entries[i].load();
 					// if we don't have valid
 					// value, that's it, try to
 					// write it
 					if(!e.hash) {
+						// if we don't have an assigned index
+						// then assign one
+						if(idx == (uint32_t)-1) {
+							if(!data->insert_kv(k, v, idx))
+								return 0;
+						}
 						hash_index	hi(h, idx);
 						if(entries[i].compare_exchange_strong(e, hi))
 							return &entries[i];
 						// if we can't do it, call again this function...
 						// need to keep stack at a minimum...
-						return this->insert(h, k, data, idx);
+						// The compiler should know that...
+						return this->insert_once(h, k, v, data, idx);
 					}
 					// otherwise compare if it's
 					// the same
@@ -100,17 +122,8 @@ namespace ema {
 						// then compare the key
 						// value itself
 						if(data->pairs[e.index].k == k) {
-							hash_index	hi(h, idx);
-							if(entries[i].compare_exchange_strong(e, hi)) {
-								// if we have replaced, reset the original
-								// key and value...
-								data->pairs[e.index].k = Key();
-								data->pairs[e.index].v = Value();
-								return &entries[i];
-							}
-							// if we can't do it, call again this function...
-							// need to keep stack at a minimum...
-							return this->insert(h, k, data, idx);	
+							// if it's the same, just return 0
+							return 0;
 						}
 					}
 				}
@@ -125,26 +138,27 @@ namespace ema {
 
 		hash_entry	*entries_;
 		kv_chunk	*data_;
+
+		const static uint32_t	HASH_FLAG = 0x80000000;
 	public:
 		hmap() : entries_(new hash_entry[Nbuckets]), data_(new kv_chunk) {
 		}
 
 		Value* find(const Key& k) const {
 			Hasher		hasher;
-			const hash_type	cur_hash = hasher(k);
+			const hash_type	cur_hash = hasher(k) | HASH_FLAG;
 			const auto&	cur_bucket = entries_[cur_hash%Nbuckets];
 			const auto*	cur_el = cur_bucket.find(cur_hash, k, data_);
 			if(cur_el) return &data_->pairs[cur_el->load().index].v;
 			else return 0;
 		}
 
-		Value* insert(const Key& k, const Value& v) {
+		bool insert(const Key& k, const Value& v) {
 			Hasher		hasher;
-			const hash_type	cur_hash = hasher(k);
+			const hash_type	cur_hash = hasher(k) | HASH_FLAG;
 			auto&		cur_bucket = entries_[cur_hash%Nbuckets];
-			const auto*	cur_el = cur_bucket.insert(cur_hash, k, data_, 0);
-			if(cur_el) return &data_->pairs[cur_el->load().index].v;
-			else return 0;
+			const auto*	cur_el = cur_bucket.insert_once(cur_hash, k, v, data_);
+			return cur_el != 0;
 		}
 
 		~hmap() {
