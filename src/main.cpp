@@ -27,7 +27,7 @@ int main(const int argc, const char *argv[]) {
 			}
 		};
 
-		typedef ema::hmap<int, double, my_hasher, 256*1024>	MY_MAP;
+		typedef ema::hmap<int, double, my_hasher, 128*1024>	MY_MAP;
 
 		MY_MAP	m;
 		std::cout << "m.mem_size()\t" << m.mem_size() << std::endl;
@@ -43,7 +43,9 @@ int main(const int argc, const char *argv[]) {
 			}
 		};
 
-		const int	N_THREAD = 4;
+		// this test is particularly good to stress the
+		// wrong usage of this type of map
+		const int	N_THREAD = std::thread::hardware_concurrency();
 		std::thread	*th[N_THREAD];
 		for(int i = 0; i < N_THREAD; ++i) {
 			th[i] = new std::thread(fn_thread_test, i*2048, (i*2048)+(256*1024));
@@ -55,10 +57,15 @@ int main(const int argc, const char *argv[]) {
 		// print out stats for used buckets
 		MY_MAP::stats	s;
 		m.get_stats(s);
-		for(size_t i = 0; i < sizeof(s.els_per_bucket)/sizeof(size_t); ++i)
-			std::cout << i << "\t" << s.els_per_bucket[i] << std::endl;
+		size_t		total = 0;
+		std::cout << "Elems/Bucket\tTotal\n";
+		for(size_t i = 0; i < sizeof(s.els_per_bucket)/sizeof(size_t); ++i) {
+			std::cout << i << "\t\t" << s.els_per_bucket[i] << std::endl;
+			total += i * s.els_per_bucket[i];
+		}
 		std::cout << "s.unused_pairs\t" << s.unused_pairs << std::endl;
 		std::cout << "s.all_pairs\t" << s.all_pairs << std::endl;
+		std::cout << "total      \t" << total << std::endl;
 	} catch(const std::exception& e) {
 		std::cerr << "Exception: " << e.what() << std::endl;
 	} catch(...) {
