@@ -111,8 +111,8 @@ namespace ema {
 				else return 0;
 			}
 
-			template<typename FnAddEntry>
-			const std::atomic<hash_index>* insert_once(const hash_type h, const Key& k, const Value& v, kv_chunk* data, FnAddEntry&& fn_add_entry, uint32_t idx = (uint32_t)-1) {
+			template<typename FnSecEntry>
+			const std::atomic<hash_index>* insert_once(const hash_type h, const Key& k, const Value& v, kv_chunk* data, FnSecEntry&& fn_sec_entry, uint32_t idx = (uint32_t)-1) {
 				for(int i = 0; i < MAX_HASH_ENTRIES; ++i) {
 					auto	e = entries[i].load();
 					// if we don't have valid
@@ -131,7 +131,7 @@ namespace ema {
 						// if we can't do it, call again this function...
 						// need to keep stack at a minimum...
 						// The compiler should know that...
-						return this->insert_once(h, k, v, data, fn_add_entry, idx);
+						return this->insert_once(h, k, v, data, fn_sec_entry, idx);
 					}
 					// otherwise compare if it's
 					// the same
@@ -156,15 +156,15 @@ namespace ema {
 				// new bucket list...
 				hash_entry	*cur = next.load(std::memory_order_relaxed);
 				if(cur)
-					return cur->insert_once(h, k, v, data, fn_add_entry, idx);
+					return cur->insert_once(h, k, v, data, fn_sec_entry, idx);
 				// otherwise, swap it - we may have a
 				// 'soft' memory (entry) leak
-				hash_entry	*cur_next = fn_add_entry();
+				hash_entry	*cur_next = fn_sec_entry();
 				if(next.compare_exchange_strong(cur, cur_next)) {
-					return cur_next->insert_once(h, k, v, data, fn_add_entry, idx);
+					return cur_next->insert_once(h, k, v, data, fn_sec_entry, idx);
 				} else {
 					// just use the other value
-					return cur->insert_once(h, k, v, data, fn_add_entry, idx);
+					return cur->insert_once(h, k, v, data, fn_sec_entry, idx);
 				}
 			}
 		};
@@ -177,14 +177,14 @@ namespace ema {
 		// Ideally this should never be used, means
 		// or we have not many buckets
 		// or we have a bad hash function 
-		struct add_entries {
+		struct secondary_entries {
 			const static int		N_ENTRIES = 8*1024*1024/sizeof(hash_entry);
 
 			std::atomic<uint32_t>		cur_entry;
 			hash_entry			entries[N_ENTRIES];
-			std::atomic<add_entries*>	next;
+			std::atomic<secondary_entries*>	next;
 
-			add_entries() : cur_entry(0), next(0) {
+			secondary_entries() : cur_entry(0), next(0) {
 			}
 
 			hash_entry* get_entry(void) {
@@ -198,8 +198,8 @@ namespace ema {
 				uint32_t	tmp_cur_entry = cur_entry.load(std::memory_order_relaxed);
 				if(tmp_cur_entry >= N_ENTRIES) {
 					// allocate a new structure
-					add_entries	*next_entries = new add_entries(),
-							*cur_next = 0;
+					secondary_entries	*next_entries = new secondary_entries(),
+								*cur_next = 0;
 					// replace it atomically - if we fail
 					// it means someone else did it before
 					if(next.compare_exchange_strong(cur_next, next_entries)) {
@@ -224,20 +224,20 @@ namespace ema {
 
 		hash_entry			*entries_;
 		kv_chunk			*data_;
-		std::atomic<add_entries*>	add_entries_;
+		std::atomic<secondary_entries*>	sec_entries_;
 
 		const static uint32_t	HASH_FLAG = 0x80000000;
 
 		hash_entry* get_additional_entry(void) {
-			add_entries	*cur = add_entries_.load(std::memory_order_relaxed);
+			secondary_entries	*cur = sec_entries_.load(std::memory_order_relaxed);
 			if(cur)
 				return cur->get_entry();
-			add_entries	*tmp_entry = new  add_entries();
+			secondary_entries	*tmp_entry = new secondary_entries();
 			// then as usual, swap it (note cur == 0)
 			// If we can swap, use it, otherwise
 			// it means somene else must have added
 			// a valid one, then use that one
-			if(add_entries_.compare_exchange_strong(cur, tmp_entry)) {
+			if(sec_entries_.compare_exchange_strong(cur, tmp_entry)) {
 				return tmp_entry->get_entry();
 			} else {
 				delete tmp_entry;
@@ -252,7 +252,7 @@ namespace ema {
 					all_pairs;
 		};
 
-		hmap() : entries_(0), data_(0), add_entries_(0) {
+		hmap() : entries_(0), data_(0), sec_entries_(0) {
 			entries_ = new (std::nothrow) hash_entry[Nbuckets];
 			if(!entries_)
 				throw std::bad_alloc();
@@ -281,13 +281,13 @@ namespace ema {
 		}
 
 		size_t mem_size(void) const {
-			size_t	add_entries_sz = 0;
-			const auto* p_add_entries = add_entries_.load();
-			while(p_add_entries) {
-				add_entries_sz += sizeof(*p_add_entries);
-				p_add_entries = p_add_entries->next.load();
+			size_t	sec_entries_sz = 0;
+			const auto* p_sec_entries = sec_entries_.load();
+			while(p_sec_entries) {
+				sec_entries_sz += sizeof(*p_sec_entries);
+				p_sec_entries = p_sec_entries->next.load();
 			}
-			return sizeof(*this) + sizeof(hash_entry)*Nbuckets + sizeof(kv_chunk) + add_entries_sz;
+			return sizeof(*this) + sizeof(hash_entry)*Nbuckets + sizeof(kv_chunk) + sec_entries_sz;
 		}
 
 		void get_stats(stats& s) const {
@@ -306,11 +306,11 @@ namespace ema {
 			delete [] entries_;
 			delete data_;
 			// recursively delete the additional entries
-			auto* p_add_entries = add_entries_.load();
-			while(p_add_entries) {
-				auto*	p_next = p_add_entries->next.load();
-				delete p_add_entries;
-				p_add_entries = p_next;
+			auto* p_sec_entries = sec_entries_.load();
+			while(p_sec_entries) {
+				auto*	p_next = p_sec_entries->next.load();
+				delete p_sec_entries;
+				p_sec_entries = p_next;
 			}
 		}
 	};
