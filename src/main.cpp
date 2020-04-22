@@ -27,7 +27,7 @@ int main(const int argc, const char *argv[]) {
 			}
 		};
 
-		typedef ema::hmap<int, double, my_hasher, 128*1024>	MY_MAP;
+		typedef ema::hmap<int, double, my_hasher, 1024>	MY_MAP;
 
 		MY_MAP	m;
 		std::cout << "m.mem_size()\t" << m.mem_size() << std::endl;

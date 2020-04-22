@@ -69,8 +69,8 @@ namespace ema {
 		const static int		MAX_HASH_ENTRIES = 7;
 
 		struct hash_entry {
-			std::atomic<hash_index>	entries[MAX_HASH_ENTRIES];
-			hash_entry		*next;
+			std::atomic<hash_index>		entries[MAX_HASH_ENTRIES];
+			std::atomic<hash_entry*>	next;
 
 			hash_entry() : next(0) {
 			}
@@ -101,11 +101,12 @@ namespace ema {
 							return &entries[i];
 					}
 				}
-				if(next) return next->find(h, k, data);
+				if(next.load(std::memory_order_relaxed)) return next.load(std::memory_order_relaxed)->find(h, k, data);
 				else return 0;
 			}
 
-			const std::atomic<hash_index>* insert_once(const hash_type h, const Key& k, const Value& v, kv_chunk* data, uint32_t idx = (uint32_t)-1) {
+			template<typename FnAddEntry>
+			const std::atomic<hash_index>* insert_once(const hash_type h, const Key& k, const Value& v, kv_chunk* data, FnAddEntry&& fn_add_entry, uint32_t idx = (uint32_t)-1) {
 				for(int i = 0; i < MAX_HASH_ENTRIES; ++i) {
 					auto	e = entries[i].load();
 					// if we don't have valid
@@ -124,7 +125,7 @@ namespace ema {
 						// if we can't do it, call again this function...
 						// need to keep stack at a minimum...
 						// The compiler should know that...
-						return this->insert_once(h, k, v, data, idx);
+						return this->insert_once(h, k, v, data, fn_add_entry, idx);
 					}
 					// otherwise compare if it's
 					// the same
@@ -145,19 +146,98 @@ namespace ema {
 						}
 					}
 				}
-				// todo... manage allocation of
+				// manage allocation of
 				// new bucket list...
-				return 0;
+				if(next.load(std::memory_order_relaxed))
+					return next.load(std::memory_order_relaxed)->insert_once(h, k, v, data, fn_add_entry, idx);
+				// otherwise, swap it - we may have a
+				// 'soft' memory (entry) leak
+				hash_entry	*cur = 0,
+						*cur_next = fn_add_entry();
+				if(next.compare_exchange_strong(cur, cur_next)) {
+					return cur_next->insert_once(h, k, v, data, fn_add_entry, idx);
+				} else {
+					// just use the other value
+					return cur->insert_once(h, k, v, data, fn_add_entry, idx);
+				}
 			}
 		};
 
 		static_assert(sizeof(hash_index) == 8, "hash_index structure has to be 8 bytes");
-		static_assert(sizeof(hash_entry) == 64, "hash_entry structre has to be 64 bytes (cacheline)");
+		static_assert(sizeof(hash_entry) == 64, "hash_entry structure has to be 64 bytes (cacheline)");
 
-		hash_entry	*entries_;
-		kv_chunk	*data_;
+		// idea of this structure is to hold entries
+		// when we exceed the max elements per entry
+		// Ideally this should never be used, means
+		// or we have not many buckets
+		// or we have a bad hash function 
+		struct add_entries {
+			const static int		N_ENTRIES = 8*1024*1024/sizeof(hash_entry);
+
+			std::atomic<uint32_t>		cur_entry;
+			hash_entry			entries[N_ENTRIES];
+			std::atomic<add_entries*>	next;
+
+			add_entries() : cur_entry(0), next(0) {
+			}
+
+			hash_entry* get_entry(void) {
+				// if we have already a next
+				// naviagte through. Again not
+				// optimal on purpose
+				if(next.load(std::memory_order_relaxed))
+					return next.load(std::memory_order_relaxed)->get_entry();
+				// check if entries are already maxed out
+				// in case, initialize a new 'add_entries'
+				uint32_t	tmp_cur_entry = cur_entry.load(std::memory_order_relaxed);
+				if(tmp_cur_entry >= N_ENTRIES) {
+					// allocate a new structure
+					add_entries	*next_entries = new add_entries(),
+							*cur_next = 0;
+					// replace it atomically - if we fail
+					// it means someone else did it before
+					if(next.compare_exchange_strong(cur_next, next_entries)) {
+						return next_entries->get_entry();
+					} else {
+						delete next_entries;
+						return get_entry();
+					}
+				}
+				// try to get ahold of cur_entry
+				// and reserve one
+				// If we can't reserve, re-execute this
+				// method
+				if(!cur_entry.compare_exchange_strong(tmp_cur_entry, tmp_cur_entry+1)) {
+					// the compiler should know to emit code
+					// not to use the stack...
+					return get_entry();
+				}
+				return &entries[tmp_cur_entry];
+			}
+		};
+
+		hash_entry			*entries_;
+		kv_chunk			*data_;
+		std::atomic<add_entries*>	add_entries_;
 
 		const static uint32_t	HASH_FLAG = 0x80000000;
+
+		hash_entry* get_additional_entry(void) {
+			add_entries	*cur = add_entries_.load(std::memory_order_relaxed);
+			if(cur)
+				return cur->get_entry();
+			add_entries	*tmp_entry = new  add_entries();
+			// then as usual, swap it (note cur == 0)
+			// If we can swap, use it, otherwise
+			// it means somene else must have added
+			// a valid one, then use that one
+			if(add_entries_.compare_exchange_strong(cur, tmp_entry)) {
+				return tmp_entry->get_entry();
+			} else {
+				delete tmp_entry;
+				return cur->get_entry();
+			}
+		}
 	public:
 		struct stats {
 			size_t		els_per_bucket[8];
@@ -165,7 +245,15 @@ namespace ema {
 					all_pairs;
 		};
 
-		hmap() : entries_(new hash_entry[Nbuckets]), data_(new kv_chunk) {
+		hmap() : entries_(0), data_(0), add_entries_(0) {
+			entries_ = new (std::nothrow) hash_entry[Nbuckets];
+			if(!entries_)
+				throw std::bad_alloc();
+			data_ = new (std::nothrow) kv_chunk;
+			if(!data_) {
+				delete [] entries_;
+				throw std::bad_alloc();
+			}
 		}
 
 		Value* find(const Key& k) const {
@@ -181,7 +269,7 @@ namespace ema {
 			Hasher		hasher;
 			const hash_type	cur_hash = hasher(k) | HASH_FLAG;
 			auto&		cur_bucket = entries_[cur_hash%Nbuckets];
-			const auto*	cur_el = cur_bucket.insert_once(cur_hash, k, v, data_);
+			const auto*	cur_el = cur_bucket.insert_once(cur_hash, k, v, data_, [this](){ return this->get_additional_entry(); });
 			return cur_el != 0;
 		}
 
@@ -202,6 +290,13 @@ namespace ema {
 		~hmap() {
 			delete [] entries_;
 			delete data_;
+			// recursively delete the additional entries
+			auto* p_add_entries = add_entries_.load();
+			while(p_add_entries) {
+				auto*	p_next = p_add_entries->next.load();
+				delete p_add_entries;
+				p_add_entries = p_next;
+			}
 		}
 	};
 }
