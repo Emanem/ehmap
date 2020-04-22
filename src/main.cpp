@@ -27,7 +27,7 @@ int main(const int argc, const char *argv[]) {
 			}
 		};
 
-		typedef ema::hmap<int, double, my_hasher, 1024>	MY_MAP;
+		typedef ema::hmap<int, double, my_hasher, 32*1024, 2*1024*1024>	MY_MAP;
 
 		MY_MAP	m;
 		std::cout << "m.mem_size()\t" << m.mem_size() << std::endl;
@@ -63,9 +63,11 @@ int main(const int argc, const char *argv[]) {
 			std::cout << i << "\t\t" << s.els_per_bucket[i] << std::endl;
 			total += i * s.els_per_bucket[i];
 		}
+		std::cout << "Secondary   \t" << s.els_secondary_bucket << std::endl;
 		std::cout << "s.unused_pairs\t" << s.unused_pairs << std::endl;
 		std::cout << "s.all_pairs\t" << s.all_pairs << std::endl;
-		std::cout << "total      \t" << total << std::endl;
+		std::cout << "total      \t" << (total + s.els_secondary_bucket) << std::endl;
+		std::cout << "m.mem_size()\t" << m.mem_size() << std::endl;
 	} catch(const std::exception& e) {
 		std::cerr << "Exception: " << e.what() << std::endl;
 	} catch(...) {

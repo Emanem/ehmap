@@ -81,7 +81,13 @@ namespace ema {
 					if(!e.hash)
 						return i;
 				}
-				return MAX_HASH_ENTRIES-1;
+				return MAX_HASH_ENTRIES;
+			}
+
+			int size_secondary(void) const {
+				const auto*	p_next = next.load(std::memory_order_relaxed);
+				if(!p_next) return 0;
+				return p_next->size() + p_next->size_secondary();
 			}
 
 			const std::atomic<hash_index>* find(const hash_type h, const Key& k, const kv_chunk* data) const {
@@ -148,12 +154,12 @@ namespace ema {
 				}
 				// manage allocation of
 				// new bucket list...
-				if(next.load(std::memory_order_relaxed))
-					return next.load(std::memory_order_relaxed)->insert_once(h, k, v, data, fn_add_entry, idx);
+				hash_entry	*cur = next.load(std::memory_order_relaxed);
+				if(cur)
+					return cur->insert_once(h, k, v, data, fn_add_entry, idx);
 				// otherwise, swap it - we may have a
 				// 'soft' memory (entry) leak
-				hash_entry	*cur = 0,
-						*cur_next = fn_add_entry();
+				hash_entry	*cur_next = fn_add_entry();
 				if(next.compare_exchange_strong(cur, cur_next)) {
 					return cur_next->insert_once(h, k, v, data, fn_add_entry, idx);
 				} else {
@@ -240,7 +246,8 @@ namespace ema {
 		}
 	public:
 		struct stats {
-			size_t		els_per_bucket[8];
+			size_t		els_per_bucket[8],
+					els_secondary_bucket;
 			uint32_t	unused_pairs,
 					all_pairs;
 		};
@@ -274,14 +281,22 @@ namespace ema {
 		}
 
 		size_t mem_size(void) const {
-			return sizeof(*this) + sizeof(hash_entry)*Nbuckets + sizeof(kv_chunk);
+			size_t	add_entries_sz = 0;
+			const auto* p_add_entries = add_entries_.load();
+			while(p_add_entries) {
+				add_entries_sz += sizeof(*p_add_entries);
+				p_add_entries = p_add_entries->next.load();
+			}
+			return sizeof(*this) + sizeof(hash_entry)*Nbuckets + sizeof(kv_chunk) + add_entries_sz;
 		}
 
 		void get_stats(stats& s) const {
 			for(int i = 0; i < 8; ++i)
 				s.els_per_bucket[i] = 0;
+			s.els_secondary_bucket = 0;
 			for(size_t i = 0; i < Nbuckets; ++i) {
 				++s.els_per_bucket[entries_[i].size()];
+				s.els_secondary_bucket += entries_[i].size_secondary();
 			}
 			s.unused_pairs = data_->unused_pairs;
 			s.all_pairs = data_->cur_pair;
